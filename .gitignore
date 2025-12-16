@@ -22,3 +22,6 @@ messages.db
 # Temp files
 *.tmp
 *.log
+
+# Environment variables
+.env

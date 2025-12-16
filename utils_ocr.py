@@ -59,12 +59,14 @@ def get_others_messages(ocr_results: list, confidence_threshold: float = 0.4) ->
     """
     从 OCR 结果中提取他人消息（左侧消息）
 
+    内部进行位置过滤（x < 0.2）、置信度过滤、长度过滤
+
     Args:
         ocr_results: ocr_image 返回的结果列表
-        confidence_threshold: 置信度阈值
+        confidence_threshold: 置信度阈值（默认 0.4）
 
     Returns:
-        list: 他人消息文本列表
+        list: 消息文本列表 ['消息1', '消息2', ...]
     """
     messages = []
     for r in ocr_results:
@@ -74,6 +76,7 @@ def get_others_messages(ocr_results: list, confidence_threshold: float = 0.4) ->
         # 置信度过滤
         if r['confidence'] < confidence_threshold:
             continue
+        # 文本清理和长度过滤
         text = r['text'].strip()
         if len(text) >= 2:
             messages.append(text)

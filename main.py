@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-AWSL 微信机器人 - 使用 macOS Vision OCR
-监控指定群聊，检测到 "awsl" 消息时自动发送随机图片
+AWSL 微信机器人 - 使用 Accessibility API
+监控指定群聊，检测到 "awsl" 消息时自动发送随机图片或AI回复
 """
 
 import os
@@ -13,9 +13,13 @@ import tempfile
 import re
 import sqlite3
 import requests
+import queue
+import threading
+import Quartz
 
-from config import Config
-from utils_ocr import screenshot_and_ocr
+from config import config
+from utils_accessibility_api import get_messages_via_accessibility
+from ai_service import AIService
 
 # 日志配置
 logging.basicConfig(
@@ -62,6 +66,61 @@ class WeChatOCR:
         subprocess.run(['open', '-a', self.process_name], check=True)
         time.sleep(0.3)
 
+    def click_input_box(self):
+        """点击输入框以获得焦点"""
+        # 使用 AppleScript 获取窗口位置和大小
+        script = f'''
+        tell application "System Events"
+            tell process "{self.process_name}"
+                set wechatWindow to window 1
+                set {{wx, wy}} to position of wechatWindow
+                set {{ww, wh}} to size of wechatWindow
+                return (wx as text) & "," & (wy as text) & "," & (ww as text) & "," & (wh as text)
+            end tell
+        end tell
+        '''
+        result = subprocess.run(['osascript', '-e', script],
+                              capture_output=True, text=True, timeout=5)
+
+        if result.returncode != 0:
+            logger.warning(f"获取窗口位置失败: {result.stderr}")
+            return False
+
+        # 解析窗口位置和大小
+        try:
+            wx, wy, ww, wh = map(float, result.stdout.strip().split(','))
+        except Exception as e:
+            logger.warning(f"解析窗口坐标失败: {e}")
+            return False
+
+        # 计算点击位置（窗口底部中间偏右）
+        click_x = wx + ww * 0.6
+        click_y = wy + wh * 0.92
+
+        # 使用 Quartz 执行系统级鼠标点击
+        # 移动鼠标到目标位置
+        move_event = Quartz.CGEventCreateMouseEvent(
+            None, Quartz.kCGEventMouseMoved, (click_x, click_y), 0
+        )
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap, move_event)
+        time.sleep(0.05)
+
+        # 鼠标按下
+        mouse_down = Quartz.CGEventCreateMouseEvent(
+            None, Quartz.kCGEventLeftMouseDown, (click_x, click_y), 0
+        )
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap, mouse_down)
+        time.sleep(0.05)
+
+        # 鼠标抬起
+        mouse_up = Quartz.CGEventCreateMouseEvent(
+            None, Quartz.kCGEventLeftMouseUp, (click_x, click_y), 0
+        )
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap, mouse_up)
+
+        logger.debug(f"已点击输入框位置: ({click_x:.0f}, {click_y:.0f})")
+        return True
+
     def find_chat(self, chat_name: str) -> bool:
         """查找并切换到指定聊天窗口"""
         self.activate_window()
@@ -78,11 +137,16 @@ class WeChatOCR:
                 key code 36
                 delay 0.5
                 key code 53
+                delay 0.3
             end tell
         end tell
         '''
         self._run_applescript(script)
         time.sleep(0.5)
+
+        # 点击输入框获得焦点
+        self.click_input_box()
+
         logger.info(f"已切换到聊天: {chat_name}")
         return True
 
@@ -91,20 +155,18 @@ class WeChatOCR:
         self.activate_window()
         time.sleep(0.2)
 
-        # 使用 utils 获取消息
-        ocr_results = screenshot_and_ocr(self.process_name)
+        # 使用 Accessibility API 获取消息
+        all_messages = get_messages_via_accessibility(self.process_name)
 
         # 过滤噪音
         messages = []
-        for r in ocr_results:
-            text = r['text'].strip()
-            if r['confidence'] < 0.4:
-                continue
+        for text in all_messages:
             if len(text) < 2:
                 continue
             if re.match(r'^[\d:]+$', text):  # 纯时间戳
                 continue
-            if text in ['<', '>', 'S', '...']:  # UI 元素
+            # UI 元素和特殊标记
+            if text in ['<', '>', 'S', '...', 'Image', 'Animated Stickers']:
                 continue
             messages.append(text)
 
@@ -166,20 +228,44 @@ class WeChatOCR:
 
 
 class AWSlBot:
-    """AWSL 机器人"""
+    """AWSL 机器人 - 使用消息队列分离检测和处理"""
 
     def __init__(self, group_name: str):
         self.group_name = group_name
         self.wechat = WeChatOCR()
         self.max_cache = 200
+
+        # 消息队列（最多10个待处理消息）
+        self.message_queue = queue.Queue(maxsize=10)
+
+        # 冷却控制
         self.last_trigger_time = 0
+        self.cooldown_lock = threading.Lock()
+
+        # 数据库锁（保护数据库操作）
+        self.db_lock = threading.Lock()
+
+        # 运行控制
+        self.running = False
+        self.detector_thread = None
+        self.processor_thread = None
+
         self._init_db()
+
+        # 初始化 AI 服务
+        try:
+            self.ai_service = AIService()
+        except Exception as e:
+            logger.warning(f"AI 服务初始化失败，AI 功能将不可用: {e}")
+            self.ai_service = None
+
         logger.info(f"AWSL Bot 初始化完成，监控群聊: {group_name}")
 
     def _init_db(self):
         """初始化 SQLite 数据库"""
         db_path = os.path.join(os.path.dirname(__file__), 'messages.db')
-        self.conn = sqlite3.connect(db_path)
+        # 允许跨线程使用（因为我们使用队列模式）
+        self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.conn.execute('''
             CREATE TABLE IF NOT EXISTS message_hashes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -192,39 +278,42 @@ class AWSlBot:
 
     def _is_processed(self, msg_hash: str) -> bool:
         """检查消息是否已处理"""
-        cursor = self.conn.execute(
-            'SELECT 1 FROM message_hashes WHERE hash = ?', (msg_hash,)
-        )
-        return cursor.fetchone() is not None
+        with self.db_lock:
+            cursor = self.conn.execute(
+                'SELECT 1 FROM message_hashes WHERE hash = ?', (msg_hash,)
+            )
+            return cursor.fetchone() is not None
 
     def _mark_processed(self, msg_hash: str):
         """标记消息为已处理"""
-        try:
-            self.conn.execute(
-                'INSERT OR IGNORE INTO message_hashes (hash) VALUES (?)', (msg_hash,)
-            )
-            self.conn.commit()
-        except sqlite3.Error as e:
-            logger.error(f"数据库写入失败: {e}")
+        with self.db_lock:
+            try:
+                self.conn.execute(
+                    'INSERT OR IGNORE INTO message_hashes (hash) VALUES (?)', (msg_hash,)
+                )
+                self.conn.commit()
+            except sqlite3.Error as e:
+                logger.error(f"数据库写入失败: {e}")
 
     def _cleanup_old_hashes(self):
         """清理旧记录，保留最近的记录"""
-        cursor = self.conn.execute('SELECT COUNT(*) FROM message_hashes')
-        count = cursor.fetchone()[0]
-        if count > self.max_cache:
-            self.conn.execute('''
-                DELETE FROM message_hashes WHERE id IN (
-                    SELECT id FROM message_hashes ORDER BY id ASC LIMIT ?
-                )
-            ''', (count - self.max_cache // 2,))
-            self.conn.commit()
-            logger.info(f"清理旧记录，剩余 {self.max_cache // 2} 条")
+        with self.db_lock:
+            cursor = self.conn.execute('SELECT COUNT(*) FROM message_hashes')
+            count = cursor.fetchone()[0]
+            if count > self.max_cache:
+                self.conn.execute('''
+                    DELETE FROM message_hashes WHERE id IN (
+                        SELECT id FROM message_hashes ORDER BY id ASC LIMIT ?
+                    )
+                ''', (count - self.max_cache // 2,))
+                self.conn.commit()
+                logger.info(f"清理旧记录，剩余 {self.max_cache // 2} 条")
 
     def fetch_awsl_image(self) -> str:
         """从 API 获取随机图片 URL"""
         try:
             response = requests.get(
-                Config.API_URL,
+                config.API_URL,
                 headers={'accept': 'application/json'},
                 timeout=10
             )
@@ -278,8 +367,15 @@ class AWSlBot:
             except OSError:
                 pass
 
-    def is_trigger(self, text: str) -> bool:
-        """检查是否包含触发词"""
+    def is_trigger(self, text: str) -> tuple:
+        """
+        检查是否包含触发词
+
+        Returns:
+            tuple: (trigger_type, content)
+                trigger_type: "image" - 发送图片, "ai" - AI回复, None - 不触发
+                content: AI模式时为问题内容，其他为空字符串
+        """
         # 提取消息内容（去掉用户名前缀）
         content = text
         for delimiter in [':', '：']:
@@ -289,35 +385,40 @@ class AWSlBot:
                     content = parts[1].strip()
                 break
 
-        return content.lower() == Config.TRIGGER_KEYWORD.lower()
+        # 检查是否为 AI 触发词 (awsl 开头后面跟着内容)
+        keyword_lower = config.TRIGGER_KEYWORD.lower()
+        content_lower = content.lower()
 
-    def run(self):
-        """运行机器人主循环"""
-        logger.info("=" * 50)
-        logger.info("AWSL Bot 启动 (OCR 模式)")
-        logger.info(f"监控群聊: {self.group_name}")
-        logger.info(f"触发关键词: {Config.TRIGGER_KEYWORD}")
-        logger.info(f"检查间隔: {Config.CHECK_INTERVAL} 秒")
-        logger.info("=" * 50)
+        # AI 模式: awsl后面跟着任何文字（不管有没有空格）
+        if content_lower.startswith(keyword_lower) and len(content) > len(config.TRIGGER_KEYWORD):
+            # 提取问题部分，去掉开头的 awsl
+            question = content[len(config.TRIGGER_KEYWORD):].strip()
+            if question:
+                return ("ai", question)
 
-        # 切换到目标群聊
-        self.wechat.find_chat(self.group_name)
+        # 图片模式: 纯 awsl
+        if content_lower == keyword_lower:
+            return ("image", "")
+
+        return (None, "")
+
+    def message_detector_loop(self):
+        """消息检测循环 - 持续检测新消息并加入队列"""
+        logger.info("消息检测线程启动")
 
         # 初始化：记录当前消息避免重复触发
         initial_messages = self.wechat.get_messages()
         if len(initial_messages) >= 3:
             recent = tuple(initial_messages[-3:])
             self._mark_processed(str(hash(recent)))
-        logger.info(f"已记录历史消息状态")
+        logger.info("已记录历史消息状态")
 
-        logger.info("开始监控消息...")
-
-        try:
-            while True:
+        while self.running:
+            try:
                 messages = self.wechat.get_messages()
 
                 logger.info("-" * 40)
-                logger.info(f"OCR 识别到 {len(messages)} 条消息")
+                logger.info(f"检测到 {len(messages)} 条消息")
 
                 if len(messages) >= 3:
                     # 取最后3条消息作为上下文
@@ -330,31 +431,150 @@ class AWSlBot:
                         last_msg = messages[-1]
                         logger.info(f"新消息: {last_msg}")
 
-                        if self.is_trigger(last_msg):
-                            # 检查冷却时间
-                            now = time.time()
-                            if now - self.last_trigger_time >= Config.TRIGGER_COOLDOWN:
-                                logger.info(">>> 触发 AWSL! 发送图片...")
-                                self.send_awsl_image()
-                                self.last_trigger_time = now
-                                time.sleep(1)
-                            else:
-                                remaining = Config.TRIGGER_COOLDOWN - (now - self.last_trigger_time)
-                                logger.info(f"冷却中，还需 {remaining:.1f} 秒")
+                        trigger_type, content = self.is_trigger(last_msg)
+
+                        if trigger_type:
+                            # 将触发消息加入队列
+                            try:
+                                self.message_queue.put_nowait({
+                                    'type': trigger_type,
+                                    'content': content,
+                                    'timestamp': time.time()
+                                })
+                                logger.info(f"✓ 消息已加入队列 (队列大小: {self.message_queue.qsize()})")
+                            except queue.Full:
+                                logger.warning("⚠ 队列已满，丢弃消息")
 
                 # 清理旧记录
                 self._cleanup_old_hashes()
 
-                time.sleep(Config.CHECK_INTERVAL)
+                time.sleep(config.CHECK_INTERVAL)
+
+            except Exception as e:
+                logger.error(f"消息检测出错: {e}")
+                time.sleep(config.CHECK_INTERVAL)
+
+        logger.info("消息检测线程退出")
+
+    def message_processor_loop(self):
+        """消息处理循环 - 从队列取消息并处理（带冷却）"""
+        logger.info("消息处理线程启动")
+
+        while self.running:
+            try:
+                # 从队列获取消息（最多等待1秒）
+                try:
+                    task = self.message_queue.get(timeout=1)
+                except queue.Empty:
+                    continue
+
+                trigger_type = task['type']
+                content = task['content']
+
+                # 检查冷却时间
+                with self.cooldown_lock:
+                    now = time.time()
+                    remaining = config.TRIGGER_COOLDOWN - (now - self.last_trigger_time)
+
+                    if remaining > 0:
+                        logger.info(f"⏳ 冷却中，还需 {remaining:.1f} 秒，消息将稍后处理")
+                        # 等待冷却时间
+                        time.sleep(remaining)
+                        now = time.time()
+
+                    # 处理消息
+                    if trigger_type == "image":
+                        logger.info(">>> 触发 AWSL! 发送图片...")
+                        self.send_awsl_image()
+                    elif trigger_type == "ai" and self.ai_service:
+                        logger.info(f">>> 触发 AI 回复! 问题: {content}")
+                        answer = self.ai_service.ask(content)
+                        if answer:
+                            self.wechat.send_text(answer)
+                        else:
+                            logger.error("AI 回复失败")
+                            self.wechat.send_text("抱歉，我现在无法回答这个问题 😅")
+                    elif trigger_type == "ai" and not self.ai_service:
+                        logger.warning("AI 服务未初始化，无法回复")
+
+                    # 更新最后触发时间
+                    self.last_trigger_time = now
+
+                # 标记任务完成
+                self.message_queue.task_done()
+
+            except Exception as e:
+                logger.error(f"消息处理出错: {e}")
+                import traceback
+                traceback.print_exc()
+
+        logger.info("消息处理线程退出")
+
+    def run(self):
+        """运行机器人主循环"""
+        logger.info("=" * 50)
+        logger.info("AWSL Bot 启动 (Accessibility API + 队列模式)")
+        logger.info(f"监控群聊: {self.group_name}")
+        logger.info(f"触发关键词: {config.TRIGGER_KEYWORD}")
+        logger.info(f"检查间隔: {config.CHECK_INTERVAL} 秒")
+        logger.info(f"响应冷却: {config.TRIGGER_COOLDOWN} 秒")
+        logger.info(f"队列大小: 最多 10 条")
+        logger.info("=" * 50)
+
+        # 切换到目标群聊
+        self.wechat.find_chat(self.group_name)
+
+        # 设置运行标志
+        self.running = True
+
+        # 启动检测线程
+        self.detector_thread = threading.Thread(
+            target=self.message_detector_loop,
+            name="MessageDetector",
+            daemon=True
+        )
+        self.detector_thread.start()
+
+        # 启动处理线程
+        self.processor_thread = threading.Thread(
+            target=self.message_processor_loop,
+            name="MessageProcessor",
+            daemon=True
+        )
+        self.processor_thread.start()
+
+        logger.info("两个线程已启动:")
+        logger.info("  - 检测线程: 持续检测新消息")
+        logger.info("  - 处理线程: 处理消息并发送回复（带冷却）")
+        logger.info("")
+        logger.info("开始监控...")
+
+        try:
+            # 主线程等待
+            while True:
+                time.sleep(1)
 
         except KeyboardInterrupt:
-            logger.info("收到停止信号，退出...")
-            self.conn.close()
+            logger.info("")
+            logger.info("收到停止信号，正在关闭...")
+            self.running = False
+
+            # 等待线程结束
+            if self.detector_thread:
+                self.detector_thread.join(timeout=5)
+            if self.processor_thread:
+                self.processor_thread.join(timeout=5)
+
+            # 关闭数据库连接
+            with self.db_lock:
+                self.conn.close()
+
+            logger.info("机器人已停止")
 
 
 def main():
     try:
-        bot = AWSlBot(Config.GROUP_NAME)
+        bot = AWSlBot(config.GROUP_NAME)
         bot.run()
     except Exception as e:
         logger.error(f"启动失败: {e}")
