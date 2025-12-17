@@ -436,12 +436,12 @@ class AWSlBot:
         """消息检测循环 - 持续检测新消息并加入队列"""
         logger.info("消息检测线程启动")
 
-        # 初始化：记录当前消息避免重复触发
+        # 初始化：记录当前所有消息避免重复触发
         initial_messages = self.wechat.get_messages()
-        if len(initial_messages) >= 3:
-            recent = tuple(initial_messages[-3:])
-            self._mark_processed(str(hash(recent)))
-        logger.info("已记录历史消息状态")
+        for msg in initial_messages:
+            msg_hash = str(hash(msg))
+            self._mark_processed(msg_hash)
+        logger.info(f"已记录历史消息: {len(initial_messages)} 条")
 
         while self.running:
             try:
@@ -450,18 +450,21 @@ class AWSlBot:
                 logger.info("-" * 40)
                 logger.info(f"检测到 {len(messages)} 条消息")
 
-                if len(messages) >= 3:
-                    # 取最后3条消息作为上下文
-                    recent = tuple(messages[-3:])
-                    msg_hash = str(hash(recent))
-
+                # 处理所有消息，找出未处理过的
+                new_messages = []
+                for msg in messages:
+                    msg_hash = str(hash(msg))
                     if not self._is_processed(msg_hash):
+                        new_messages.append(msg)
                         self._mark_processed(msg_hash)
-                        # 检查最后一条是否触发
-                        last_msg = messages[-1]
-                        logger.info(f"新消息: {last_msg}")
 
-                        trigger_type, content = self.is_trigger(last_msg)
+                # 处理所有新消息
+                if new_messages:
+                    logger.info(f"发现 {len(new_messages)} 条新消息")
+                    for msg in new_messages:
+                        logger.info(f"新消息: {msg}")
+
+                        trigger_type, content = self.is_trigger(msg)
 
                         if trigger_type:
                             # 将触发消息加入队列
