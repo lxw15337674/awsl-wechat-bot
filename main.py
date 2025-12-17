@@ -20,6 +20,7 @@ import Quartz
 from config import config
 from utils_accessibility_api import get_messages_via_accessibility
 from ai_service import AIService
+from command_service import CommandService
 
 # 日志配置
 logging.basicConfig(
@@ -259,6 +260,17 @@ class AWSlBot:
             logger.warning(f"AI 服务初始化失败，AI 功能将不可用: {e}")
             self.ai_service = None
 
+        # 初始化命令服务
+        try:
+            self.command_service = CommandService()
+            if self.command_service.load_commands():
+                logger.info(f"命令服务初始化成功，已加载 {len(self.command_service.commands)} 个命令")
+            else:
+                logger.warning("命令列表加载失败")
+        except Exception as e:
+            logger.warning(f"命令服务初始化失败: {e}")
+            self.command_service = None
+
         logger.info(f"AWSL Bot 初始化完成，监控群聊: {group_name}")
 
     def _init_db(self):
@@ -373,8 +385,11 @@ class AWSlBot:
 
         Returns:
             tuple: (trigger_type, content)
-                trigger_type: "image" - 发送图片, "ai" - AI回复, None - 不触发
-                content: AI模式时为问题内容，其他为空字符串
+                trigger_type: "image" - 发送图片, "ai" - AI回复, "command" - 远程命令, "command_refresh" - 刷新命令列表, None - 不触发
+                content:
+                    - AI模式时为问题内容
+                    - command模式时为(command_key, params)元组
+                    - 其他为空字符串
         """
         # 提取消息内容（去掉用户名前缀）
         content = text
@@ -385,22 +400,37 @@ class AWSlBot:
                     content = parts[1].strip()
                 break
 
-        # 检查是否为 AI 触发词 (awsl 开头后面跟着内容)
+        # 检查是否为 awsl 触发词
         keyword_lower = config.TRIGGER_KEYWORD.lower()
         content_lower = content.lower()
 
-        # AI 模式: awsl后面跟着任何文字（不管有没有空格）
-        if content_lower.startswith(keyword_lower) and len(content) > len(config.TRIGGER_KEYWORD):
-            # 提取问题部分，去掉开头的 awsl
-            question = content[len(config.TRIGGER_KEYWORD):].strip()
-            if question:
-                return ("ai", question)
+        # 特殊处理：awsl hp - 刷新命令列表
+        if content_lower == f"{keyword_lower} hp":
+            logger.info("匹配到 awsl hp - 刷新命令列表")
+            return ("command_refresh", ("hp", ""))
 
-        # 图片模式: 纯 awsl
-        if content_lower == keyword_lower:
+        # 如果以 awsl 开头
+        if content_lower.startswith(keyword_lower):
+            # 提取 awsl 后面的部分
+            after_keyword = content[len(config.TRIGGER_KEYWORD):].strip()
+
+            # 如果 awsl 后面有内容，作为 AI 问题
+            if after_keyword:
+                return ("ai", after_keyword)
+
+            # 纯 awsl，发送图片
             return ("image", "")
 
+        # 检查是否为远程命令（直接执行，不需要 awsl 前缀）
+        if self.command_service:
+            cmd_match = self.command_service.match_command(content)
+            if cmd_match:
+                logger.info(f"匹配到远程命令: {cmd_match[0]} with params: {cmd_match[1]}")
+                return ("command", cmd_match)
+
+        # 不触发
         return (None, "")
+
 
     def message_detector_loop(self):
         """消息检测循环 - 持续检测新消息并加入队列"""
@@ -486,6 +516,26 @@ class AWSlBot:
                     if trigger_type == "image":
                         logger.info(">>> 触发 AWSL! 发送图片...")
                         self.send_awsl_image()
+
+                    elif trigger_type in ["command", "command_refresh"] and self.command_service:
+                        command_key, params = content
+                        logger.info(f">>> 触发命令: {command_key} with params: {params}")
+
+                        # 如果是 command_refresh 类型（awsl 前缀），刷新命令列表
+                        if trigger_type == "command_refresh":
+                            logger.info("刷新命令列表...")
+                            self.command_service.load_commands()
+
+                        # 执行命令
+                        result = self.command_service.execute_command(command_key, params)
+
+                        if result:
+                            # 直接发送文本结果
+                            self.wechat.send_text(result)
+                        else:
+                            logger.error(f"命令执行失败: {command_key}")
+                            self.wechat.send_text(f"命令执行失败: {command_key}")
+
                     elif trigger_type == "ai" and self.ai_service:
                         logger.info(f">>> 触发 AI 回复! 问题: {content}")
                         answer = self.ai_service.ask(content)
