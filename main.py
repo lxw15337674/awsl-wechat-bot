@@ -236,9 +236,16 @@ class AWSlBot:
 
     处理策略：
     1. 只处理最后3条消息（先取最后3条，再计算hash）
-    2. 去重使用前向上下文（前2条消息）计算哈希值
-    3. 使用"前2条|当前"组合，不包括后续消息
-    4. 这样新消息出现时，已有消息的哈希值不会改变
+    2. 预检查：批量检查3条消息的hash状态
+    3. 智能过滤：从后往前找到最后一个已处理的消息
+    4. 只触发：只处理最后已处理消息之后的所有新消息
+    5. 去重使用前向上下文（前2条消息）计算哈希值
+
+    示例：
+    - [msg1:新, msg2:已处理, msg3:新] → 最后已处理是msg2，处理msg3
+    - [msg1:新, msg2:已处理, msg3:已处理] → 最后已处理是msg3，无消息需处理，跳过msg1
+    - [msg1:新, msg2:新, msg3:新] → 无已处理消息，处理所有3条
+    - [msg1:新, msg2:新, msg3:已处理] → 最后已处理是msg3，无消息需处理
     """
 
     def __init__(self, group_name: str):
@@ -499,16 +506,15 @@ class AWSlBot:
                 if config.DEBUG and len(messages) > 3:
                     logger.debug(f"总消息 {len(messages)} 条，仅处理最后 3 条")
 
-                # 对最后3条消息进行去重和命令检查
-                new_messages = []
-                # 计算这3条消息在原列表中的起始索引
+                # 第一阶段：预检查所有3条消息的hash状态
                 start_index = len(messages) - len(messages_to_check)
+                message_status = []  # [(index, msg, hash, is_processed), ...]
 
                 for i, msg in enumerate(messages_to_check):
-                    # 使用在原列表中的索引计算hash
                     original_index = start_index + i
                     msg_hash = self._hash_message_with_context(messages, original_index)
                     is_processed = self._is_processed(msg_hash)
+                    message_status.append((original_index, msg, msg_hash, is_processed))
 
                     if config.DEBUG:
                         # 获取前向上下文预览
@@ -518,30 +524,58 @@ class AWSlBot:
                         context_str = " → ".join(context_preview) if context_preview else "无"
                         logger.debug(f"  [{original_index}] 消息: {msg[:30]}... | 前向上下文: [{context_str}] | Hash: {msg_hash[:16]}... | 已处理: {is_processed}")
 
-                    if not is_processed:
-                        new_messages.append(msg)
-                        self._mark_processed(msg_hash)
+                # 第二阶段：从后往前找到最后一个已处理的消息
+                # 只处理这个位置之后的所有消息
+                last_processed_idx = None
+                for idx in range(len(message_status) - 1, -1, -1):
+                    if message_status[idx][3]:  # is_processed
+                        last_processed_idx = idx
+                        break
 
-                # 处理新消息的命令触发
-                if new_messages:
-                    logger.info("-" * 40)
-                    logger.info(f"发现 {len(new_messages)} 条新消息")
-                    for msg in new_messages:
-                        logger.info(f"新消息: {msg}")
+                if last_processed_idx is None:
+                    # 没有已处理的消息，处理所有消息
+                    messages_to_trigger = message_status
+                    if config.DEBUG:
+                        logger.debug("没有已处理的消息，处理所有3条")
+                elif last_processed_idx == len(message_status) - 1:
+                    # 最后一条是已处理的，后面没有消息了
+                    if config.DEBUG:
+                        logger.debug("最后一条消息已处理，无新消息需要处理")
+                    messages_to_trigger = []
+                else:
+                    # 处理最后一个已处理消息之后的所有消息
+                    messages_to_trigger = message_status[last_processed_idx + 1:]
+                    if config.DEBUG:
+                        skipped = last_processed_idx + 1
+                        logger.debug(f"跳过前 {skipped} 条消息（最后已处理位置: {message_status[last_processed_idx][0]}），从索引 {message_status[last_processed_idx + 1][0]} 开始处理")
 
-                        trigger_type, content = self.is_trigger(msg)
+                if messages_to_trigger:
+                    new_messages = []
+                    for original_index, msg, msg_hash, is_processed in messages_to_trigger:
+                        if not is_processed:
+                            new_messages.append(msg)
+                            self._mark_processed(msg_hash)
 
-                        if trigger_type:
-                            # 将触发消息加入队列
-                            try:
-                                self.message_queue.put_nowait({
-                                    'type': trigger_type,
-                                    'content': content,
-                                    'timestamp': time.time()
-                                })
-                                logger.info(f"✓ 消息已加入队列 (队列大小: {self.message_queue.qsize()})")
-                            except queue.Full:
-                                logger.warning("⚠ 队列已满，丢弃消息")
+                    # 处理新消息的命令触发
+                    if new_messages:
+                        logger.info("-" * 40)
+                        logger.info(f"发现 {len(new_messages)} 条新消息")
+                        for msg in new_messages:
+                            logger.info(f"新消息: {msg}")
+
+                            trigger_type, content = self.is_trigger(msg)
+
+                            if trigger_type:
+                                # 将触发消息加入队列
+                                try:
+                                    self.message_queue.put_nowait({
+                                        'type': trigger_type,
+                                        'content': content,
+                                        'timestamp': time.time()
+                                    })
+                                    logger.info(f"✓ 消息已加入队列 (队列大小: {self.message_queue.qsize()})")
+                                except queue.Full:
+                                    logger.warning("⚠ 队列已满，丢弃消息")
 
                 # 清理旧记录
                 self._cleanup_old_hashes()
