@@ -234,10 +234,11 @@ class WeChatOCR:
 class AWSlBot:
     """AWSL 机器人 - 使用消息队列分离检测和处理
 
-    去重策略：结合前向上下文（前2条消息）计算哈希值
-    - 使用"前2条|当前"的组合，不包括后续消息
-    - 这样即使新消息出现，已有消息的哈希值也不会改变
-    - 避免了消息位置变化导致的误判
+    处理策略：
+    1. 只处理最后3条消息（先取最后3条，再计算hash）
+    2. 去重使用前向上下文（前2条消息）计算哈希值
+    3. 使用"前2条|当前"组合，不包括后续消息
+    4. 这样新消息出现时，已有消息的哈希值不会改变
     """
 
     def __init__(self, group_name: str):
@@ -492,36 +493,40 @@ class AWSlBot:
                         for i, msg in enumerate(messages, 1):
                             logger.debug(f"  [{i}] {msg}")
 
-                # 处理所有消息，通过数据库历史记录去重（结合前向上下文）
+                # 只处理最后3条消息，其他的忽略（不计算hash，不检查命令）
+                messages_to_check = messages[-3:] if len(messages) > 3 else messages
+
+                if config.DEBUG and len(messages) > 3:
+                    logger.debug(f"总消息 {len(messages)} 条，仅处理最后 3 条")
+
+                # 对最后3条消息进行去重和命令检查
                 new_messages = []
-                for i, msg in enumerate(messages):
-                    msg_hash = self._hash_message_with_context(messages, i)
+                # 计算这3条消息在原列表中的起始索引
+                start_index = len(messages) - len(messages_to_check)
+
+                for i, msg in enumerate(messages_to_check):
+                    # 使用在原列表中的索引计算hash
+                    original_index = start_index + i
+                    msg_hash = self._hash_message_with_context(messages, original_index)
                     is_processed = self._is_processed(msg_hash)
 
                     if config.DEBUG:
                         # 获取前向上下文预览
                         context_preview = []
-                        for j in range(max(0, i - 2), i):
+                        for j in range(max(0, original_index - 2), original_index):
                             context_preview.append(messages[j][:15])
                         context_str = " → ".join(context_preview) if context_preview else "无"
-                        logger.debug(f"  [{i}] 消息: {msg[:30]}... | 前向上下文: [{context_str}] | Hash: {msg_hash[:16]}... | 已处理: {is_processed}")
+                        logger.debug(f"  [{original_index}] 消息: {msg[:30]}... | 前向上下文: [{context_str}] | Hash: {msg_hash[:16]}... | 已处理: {is_processed}")
 
                     if not is_processed:
                         new_messages.append(msg)
                         self._mark_processed(msg_hash)
 
-                # 只处理最后3条新消息的命令触发
-                # 其他消息仍然记录，但不触发命令
-                messages_to_trigger = new_messages[-3:] if len(new_messages) > 3 else new_messages
-
-                if config.DEBUG and len(new_messages) > 3:
-                    logger.debug(f"新消息共 {len(new_messages)} 条，仅检查最后 3 条是否触发命令")
-
-                # 处理需要触发的新消息
-                if messages_to_trigger:
+                # 处理新消息的命令触发
+                if new_messages:
                     logger.info("-" * 40)
-                    logger.info(f"发现 {len(new_messages)} 条新消息，检查最后 {len(messages_to_trigger)} 条命令触发")
-                    for msg in messages_to_trigger:
+                    logger.info(f"发现 {len(new_messages)} 条新消息")
+                    for msg in new_messages:
                         logger.info(f"新消息: {msg}")
 
                         trigger_type, content = self.is_trigger(msg)
