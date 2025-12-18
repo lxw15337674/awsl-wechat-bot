@@ -30,7 +30,7 @@ class CommandService:
             response = requests.get(
                 f"{self.api_base_url}/api/command/hp",
                 headers={'accept': 'application/json'},
-                timeout=10
+                timeout=30
             )
             response.raise_for_status()
 
@@ -112,7 +112,7 @@ class CommandService:
                 url,
                 params=query_params,
                 headers={'accept': 'application/json'},
-                timeout=15
+                timeout=30
             )
             response.raise_for_status()
 
