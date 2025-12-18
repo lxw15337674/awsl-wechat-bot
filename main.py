@@ -461,7 +461,12 @@ class AWSlBot:
                 new_messages = []
                 for msg in messages:
                     msg_hash = str(hash(msg))
-                    if not self._is_processed(msg_hash):
+                    is_processed = self._is_processed(msg_hash)
+
+                    if config.DEBUG:
+                        logger.debug(f"  消息: {msg[:50]}... | Hash: {msg_hash[:16]}... | 已处理: {is_processed}")
+
+                    if not is_processed:
                         new_messages.append(msg)
                         self._mark_processed(msg_hash)
 
