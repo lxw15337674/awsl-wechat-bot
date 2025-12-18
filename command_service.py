@@ -34,7 +34,9 @@ class CommandService:
             )
             response.raise_for_status()
 
-            self.commands = response.json()
+            # 加载命令列表并过滤掉 'hp' 命令
+            all_commands = response.json()
+            self.commands = [cmd for cmd in all_commands if cmd['key'].strip().lower() != 'hp']
             self.command_keys = [cmd['key'] for cmd in self.commands]
 
             logger.info(f"成功加载 {len(self.commands)} 个命令")

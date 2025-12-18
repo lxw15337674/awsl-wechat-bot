@@ -385,7 +385,7 @@ class AWSlBot:
 
         Returns:
             tuple: (trigger_type, content)
-                trigger_type: "image" - 发送图片, "ai" - AI回复, "command" - 远程命令, "command_refresh" - 刷新命令列表, None - 不触发
+                trigger_type: "ai" - AI回复, "command" - 远程命令, "command_refresh" - 刷新命令列表, None - 不触发
                 content:
                     - AI模式时为问题内容
                     - command模式时为(command_key, params)元组
@@ -418,8 +418,8 @@ class AWSlBot:
             if after_keyword:
                 return ("ai", after_keyword)
 
-            # 纯 awsl，发送图片
-            return ("image", "")
+            # 纯 awsl，不触发任何动作
+            return (None, "")
 
         # 检查是否为远程命令（直接执行，不需要 awsl 前缀）
         if self.command_service:
@@ -516,20 +516,10 @@ class AWSlBot:
                         now = time.time()
 
                     # 处理消息
-                    if trigger_type == "image":
-                        logger.info(">>> 触发 AWSL! 发送图片...")
-                        self.send_awsl_image()
-
-                    elif trigger_type in ["command", "command_refresh"] and self.command_service:
+                    if trigger_type == "command" and self.command_service:
+                        # 执行命令
                         command_key, params = content
                         logger.info(f">>> 触发命令: {command_key} with params: {params}")
-
-                        # 如果是 command_refresh 类型（awsl 前缀），刷新命令列表
-                        if trigger_type == "command_refresh":
-                            logger.info("刷新命令列表...")
-                            self.command_service.load_commands()
-
-                        # 执行命令
                         result = self.command_service.execute_command(command_key, params)
 
                         if result:
@@ -538,6 +528,13 @@ class AWSlBot:
                         else:
                             logger.error(f"命令执行失败: {command_key}")
                             self.wechat.send_text(f"命令执行失败: {command_key}")
+
+                    elif trigger_type == "command_refresh" and self.command_service:
+                        logger.info(">>> 触发命令刷新")
+                        # 刷新命令列表
+                        success = self.command_service.load_commands()
+                        if success:
+                            self.wechat.send_text("已经成功了")
 
                     elif trigger_type == "ai" and self.ai_service:
                         logger.info(f">>> 触发 AI 回复! 问题: {content}")
