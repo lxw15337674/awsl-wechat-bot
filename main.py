@@ -311,13 +311,16 @@ class AWSlBot:
 
     def run(self):
         """运行机器人"""
-        # 激活微信窗口
+        # 激活微信窗口并切换到目标群聊
         self.wechat.activate_window()
-        
-        # 默认启动消息
-        time.sleep(1) # 等待窗口稳定
-        self.wechat.send_text("机器人已启动")
-            
+        time.sleep(0.5)
+
+        # 切换到指定群聊
+        if hasattr(self.wechat, 'find_chat'):
+            logger.info(f"正在切换到群聊: {self.group_name}")
+            self.wechat.find_chat(self.group_name)
+            time.sleep(1)
+
         self.running = True
         self.detector_thread = threading.Thread(target=self.message_detector_loop, daemon=True)
         self.processor_thread = threading.Thread(target=self.message_processor_loop, daemon=True)
