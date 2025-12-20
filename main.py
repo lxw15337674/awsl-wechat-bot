@@ -317,6 +317,11 @@ class AWSlBot:
 
                 # 获取消息
                 messages = self.wechat.get_messages_from_window(window)
+
+                # DEBUG: 打印完整消息列表
+                if config.DEBUG:
+                    logger.debug(f"[{group_name}] 消息列表({len(messages)}条): {[m[:20]+'...' if len(m)>20 else m for m in messages]}")
+
                 messages_to_check = messages[-3:] if len(messages) > 3 else messages
                 start_index = len(messages) - len(messages_to_check)
 
@@ -324,7 +329,12 @@ class AWSlBot:
                 new_messages = []
                 for i, msg in enumerate(messages_to_check):
                     msg_hash = self._hash_message_with_context(messages, start_index + i, group_name)
-                    if not self._is_processed(msg_hash, group_name):
+                    is_processed = self._is_processed(msg_hash, group_name)
+                    if config.DEBUG:
+                        idx = start_index + i
+                        ctx = [messages[j][:15]+'...' if len(messages[j])>15 else messages[j] for j in range(max(0, idx-2), idx)]
+                        logger.debug(f"[{group_name}] [{i}] msg={msg[:30]}... ctx={ctx} hash={msg_hash[-8:]} processed={is_processed}")
+                    if not is_processed:
                         new_messages.append((msg, msg_hash))
 
                 # 处理新消息
