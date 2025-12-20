@@ -330,16 +330,27 @@ class AWSlBot:
                 for i, msg in enumerate(messages_to_check):
                     msg_hash = self._hash_message_with_context(messages, start_index + i, group_name)
                     is_processed = self._is_processed(msg_hash, group_name)
+                    idx = start_index + i
+                    ctx_count = min(2, idx)  # 实际上下文数量
+                    is_last = (i == len(messages_to_check) - 1)  # 是否是最后一条
                     if config.DEBUG:
-                        idx = start_index + i
                         ctx = [messages[j][:15]+'...' if len(messages[j])>15 else messages[j] for j in range(max(0, idx-2), idx)]
-                        logger.debug(f"[{group_name}] [{i}] msg={msg[:30]}... ctx={ctx} hash={msg_hash[-8:]} processed={is_processed}")
+                        logger.debug(f"[{group_name}] [{i}] msg={msg[:30]}... ctx={ctx} hash={msg_hash[-8:]} processed={is_processed} is_last={is_last}")
                     if not is_processed:
-                        new_messages.append((msg, msg_hash))
+                        # 只有最后一条消息才触发，或者上下文足够2条的消息才触发
+                        # 否则只标记已处理不触发
+                        if is_last or ctx_count >= 2:
+                            new_messages.append((msg, msg_hash, True))  # True = 可触发
+                        else:
+                            new_messages.append((msg, msg_hash, False))  # False = 只标记不触发
 
                 # 处理新消息
-                for msg, msg_hash in new_messages:
+                for msg, msg_hash, can_trigger in new_messages:
                     self._mark_processed(msg_hash, group_name)
+                    if not can_trigger:
+                        if config.DEBUG:
+                            logger.debug(f"[{group_name}] 上下文不足，跳过触发: {msg[:30]}...")
+                        continue
                     trigger_type, content = self.is_trigger(msg)
                     if trigger_type:
                         logger.info(f"[{group_name}] 检测到触发: {msg}")
