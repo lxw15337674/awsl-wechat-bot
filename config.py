@@ -61,6 +61,11 @@ class Config(BaseSettings):
         {"type": "interval", "seconds": 3600, "command": "ss"}
     ]
 
+    # HTTP API 服务配置
+    HTTP_API_ENABLED: bool = True
+    HTTP_API_HOST: str = "0.0.0.0"
+    HTTP_API_PORT: int = 8000
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

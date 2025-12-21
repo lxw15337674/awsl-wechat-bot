@@ -10,6 +10,7 @@
 - **原生消息读取**：
   - macOS: 使用 Accessibility API 直接读取微信消息（100% 准确）
   - Windows: 使用 UI Automation 直接读取控件（100% 准确）
+- **HTTP API 服务**：提供 RESTful API 接口，支持远程控制发送消息
 - 队列模式架构，消息检测与处理分离，防止漏掉回复
 - 智能消息去重机制，基于上下文的哈希算法（前2条消息）
 - 优化的消息处理策略，只处理最后3条消息，避免重复触发
@@ -46,24 +47,18 @@
 cd awsl-wechat-bot
 ```
 
-2. 创建虚拟环境并激活：
+2. 创建虚拟环境并安装依赖：
 
 **macOS:**
 ```bash
 python3 -m venv venv
-source venv/bin/activate
+./venv/bin/python -m pip install -r requirements.txt
 ```
 
 **Windows:**
 ```bash
 python -m venv venv
-.\venv\Scripts\activate
-```
-
-3. 安装依赖：
-
-```bash
-pip install -r requirements.txt
+./venv/Scripts/python -m pip install -r requirements.txt
 ```
 
 ## 配置
@@ -137,8 +132,14 @@ class Config(BaseSettings):
 
 直接运行机器人：
 
+**macOS:**
 ```bash
-python main.py
+./venv/bin/python main.py
+```
+
+**Windows:**
+```bash
+./venv/Scripts/python main.py
 ```
 
 机器人会自动：
@@ -181,6 +182,61 @@ python main.py
 - 命令列表和功能由远程 API 动态提供
 - 启用 DEBUG 模式可查看详细的命令匹配和执行日志
 
+### 4. HTTP API 使用
+
+机器人提供 HTTP API 接口，可以通过 HTTP 请求远程发送消息到微信群组。
+
+**配置 (.env)**：
+```env
+HTTP_API_ENABLED=true    # 启用 HTTP API
+HTTP_API_HOST=0.0.0.0    # 监听地址
+HTTP_API_PORT=8000       # 监听端口
+```
+
+**API 端点**：
+
+```bash
+# 1. 列出所有聊天窗口
+GET http://localhost:8000/api/groups
+
+# 2. 发送消息到指定窗口
+POST http://localhost:8000/api/send
+Content-Type: application/json
+
+{
+  "group_name": "测试群",
+  "message": "Hello, World!"
+}
+
+# 3. 健康检查
+GET http://localhost:8000/api/health
+```
+
+**使用示例**：
+```bash
+# curl
+curl http://localhost:8000/api/groups
+curl -X POST http://localhost:8000/api/send \
+  -H "Content-Type: application/json" \
+  -d '{"group_name": "测试群", "message": "Hello!"}'
+```
+
+```python
+# Python
+import requests
+
+# 列出所有群组
+groups = requests.get("http://localhost:8000/api/groups").json()
+
+# 发送消息
+result = requests.post(
+    "http://localhost:8000/api/send",
+    json={"group_name": "测试群", "message": "Hello!"}
+).json()
+```
+
+**API 文档**：启动后访问 http://localhost:8000/docs 查看完整 API 文档
+
 ## 项目结构
 
 ```
@@ -194,7 +250,8 @@ awsl-wechat-bot/
 │   │   └── windows.py           # Windows 实现 (UI Automation)
 │   ├── services/                # 服务模块
 │   │   ├── ai.py                # AI 服务模块
-│   │   └── command.py           # 动态命令服务模块
+│   │   ├── command.py           # 动态命令服务模块
+│   │   └── http_server.py       # HTTP API 服务模块
 │   ├── utils/                   # 工具模块
 │   │   ├── accessibility.py     # Accessibility API 工具 (macOS)
 │   │   ├── ocr.py               # OCR 相关工具（备用）

@@ -21,6 +21,7 @@ from config import config
 from src.adapters import get_wechat_adapter
 from src.services.ai import AIService
 from src.services.command import CommandService
+from src.services.http_server import HTTPServer
 
 # 根据配置设置日志级别
 log_level = logging.DEBUG if config.DEBUG else logging.INFO
@@ -58,6 +59,7 @@ class AWSlBot:
         self.detector_threads = []  # 每个群一个检测线程
         self.processor_thread = None
         self.scheduler_thread = None
+        self.http_thread = None  # HTTP API 服务线程
 
         self._init_db()
 
@@ -494,6 +496,23 @@ class AWSlBot:
         self.scheduler_thread = threading.Thread(target=self.scheduler_loop, daemon=True)
         self.scheduler_thread.start()
         logger.info("已启动调度线程")
+
+        # 启动 HTTP API 服务（如果启用）
+        if config.HTTP_API_ENABLED:
+            try:
+                http_server = HTTPServer(self)
+                self.http_thread = threading.Thread(
+                    target=http_server.run,
+                    args=(config.HTTP_API_HOST, config.HTTP_API_PORT),
+                    daemon=True
+                )
+                self.http_thread.start()
+                logger.info(f"已启动 HTTP API 服务: http://{config.HTTP_API_HOST}:{config.HTTP_API_PORT}")
+                print(f"✓ HTTP API: http://{config.HTTP_API_HOST}:{config.HTTP_API_PORT}")
+                print(f"  - GET  /api/groups   - 列出所有聊天窗口")
+                print(f"  - POST /api/send     - 发送消息到指定窗口")
+            except Exception as e:
+                logger.error(f"启动 HTTP API 服务失败: {e}")
 
         print(f"\n✓ 正在监听 {len(self.groups)} 个群...")
         print("按 Ctrl+C 停止监听\n")
