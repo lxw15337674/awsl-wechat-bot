@@ -734,9 +734,17 @@
 
                 if (response.ok) {
                     showMessage('sendResultMessage', '✓ 消息发送成功！', 'success');
-                    document.getElementById('messageText').value = '';
-                    document.getElementById('sendImage').value = '';
-                    document.getElementById('sendImagePreview').style.display = 'none';
+
+                    // 清空表单（检查元素是否存在）
+                    const messageTextEl = document.getElementById('messageText');
+                    if (messageTextEl) messageTextEl.value = '';
+
+                    const sendImageEl = document.getElementById('sendImage');
+                    if (sendImageEl) sendImageEl.value = '';
+
+                    const sendImagePreviewEl = document.getElementById('sendImagePreview');
+                    if (sendImagePreviewEl) sendImagePreviewEl.style.display = 'none';
+
                     sendImageBase64 = '';
                 } else {
                     showMessage('sendResultMessage', `✗ ${result.detail || '发送失败'}`, 'error');
@@ -1101,9 +1109,6 @@
                     showMessage('taskFormResultMessage', `✓ ${editingTaskId ? '任务已更新' : '任务已创建'}`, 'success');
                     hideTaskForm();
 
-                    // 刷新任务列表
-                    await loadTasks();
-
                     // 清空图片预览
                     taskImageBase64 = '';
                     document.getElementById('taskImagePreview').style.display = 'none';
@@ -1119,6 +1124,9 @@
                 console.error('提交任务失败:', error);
                 showMessage('taskFormResultMessage', '✗ 网络错误，请重试', 'error');
             } finally {
+                // 无论成功、失败还是异常，都刷新任务列表
+                await loadTasks();
+
                 btn.disabled = false;
                 btnText.textContent = originalText;
             }
