@@ -114,6 +114,10 @@ class CommandService:
             data = response.json()
             response_content = data.get('content', '')
 
+            # DEBUG 模式：打印 API 返回值
+            if config.DEBUG:
+                logger.debug(f"API返回: 长度={len(response_content)} 内容={repr(response_content)}")
+
             return response_content
 
         except Exception as e:
