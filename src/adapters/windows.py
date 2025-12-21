@@ -219,6 +219,25 @@ class WindowsWeChatAdapter(BaseWeChatAdapter):
             # 通过剪贴板设置文本
             auto.SetClipboardText(text)
 
+            # 验证剪贴板内容
+            clipboard_content = auto.GetClipboardText()
+            if clipboard_content != text:
+                if config.DEBUG:
+                    logger.debug(f"剪贴板截断！原始长度={len(text)} 剪贴板长度={len(clipboard_content)}")
+                    logger.debug(f"原始内容: {repr(text)}")
+                    logger.debug(f"剪贴板内容: {repr(clipboard_content)}")
+
+                # 使用 Windows API 重新设置
+                import win32clipboard
+                import win32con
+                win32clipboard.OpenClipboard()
+                win32clipboard.EmptyClipboard()
+                win32clipboard.SetClipboardData(win32con.CF_UNICODETEXT, text)
+                win32clipboard.CloseClipboard()
+
+                if config.DEBUG:
+                    logger.debug("已使用 win32clipboard 重新设置剪贴板")
+
             # 粘贴
             window.SendKeys('{CTRL}v', waitTime=0.2)
 
@@ -328,13 +347,25 @@ class WindowsWeChatAdapter(BaseWeChatAdapter):
         logger.debug(f"[send_text] 步骤 3: 剪贴板文本 - '{text}' (类型: {type(text)})")
         try:
             auto.SetClipboardText(text)
+
+            # 验证剪贴板内容
+            clipboard_content = auto.GetClipboardText()
+            logger.debug(f"[send_text] 步骤 3: 验证剪贴板内容 - '{clipboard_content}'")
+
+            if clipboard_content != text:
+                logger.warning(f"[send_text] 剪贴板截断！原始长度={len(text)} 剪贴板长度={len(clipboard_content)}")
+
+                # 使用 Windows API 重新设置
+                import win32clipboard
+                import win32con
+                win32clipboard.OpenClipboard()
+                win32clipboard.EmptyClipboard()
+                win32clipboard.SetClipboardData(win32con.CF_UNICODETEXT, text)
+                win32clipboard.CloseClipboard()
+
+                logger.debug("[send_text] 步骤 3: 已使用 win32clipboard 重新设置")
+
             logger.debug("[send_text] 步骤 3: 剪贴板设置成功")
-            # 可选：验证剪贴板内容
-            try:
-                clipboard_content = auto.GetClipboardText()
-                logger.debug(f"[send_text] 步骤 3: 验证剪贴板内容 - '{clipboard_content}'")
-            except:
-                pass
         except Exception as e:
             logger.error(f"[send_text] 步骤 3: 设置剪贴板失败 - {type(e).__name__}: {e}")
             logger.error(f"[send_text] 步骤 3: 异常详情", exc_info=True)
