@@ -1,0 +1,353 @@
+"""
+定时任务服务
+支持基于 cron 表达式的定时任务管理
+"""
+
+import logging
+import sqlite3
+import threading
+from datetime import datetime
+from typing import Optional, List, Dict
+from croniter import croniter
+
+logger = logging.getLogger(__name__)
+
+
+class ScheduledTask:
+    """定时任务模型"""
+
+    def __init__(
+        self,
+        id: Optional[int] = None,
+        name: str = "",
+        cron_expression: str = "",
+        message: str = "",
+        target_groups: str = "",  # JSON string of group names, empty = all groups
+        enabled: bool = True,
+        created_at: Optional[str] = None,
+        updated_at: Optional[str] = None,
+        last_run: Optional[str] = None
+    ):
+        self.id = id
+        self.name = name
+        self.cron_expression = cron_expression
+        self.message = message
+        self.target_groups = target_groups
+        self.enabled = enabled
+        self.created_at = created_at
+        self.updated_at = updated_at
+        self.last_run = last_run
+
+    def to_dict(self) -> dict:
+        """转换为字典"""
+        return {
+            "id": self.id,
+            "name": self.name,
+            "cron_expression": self.cron_expression,
+            "message": self.message,
+            "target_groups": self.target_groups,
+            "enabled": self.enabled,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "last_run": self.last_run
+        }
+
+
+class ScheduledTaskService:
+    """定时任务服务"""
+
+    def __init__(self, db_path: str):
+        """
+        初始化定时任务服务
+
+        Args:
+            db_path: 数据库文件路径
+        """
+        self.db_path = db_path
+        self.conn = sqlite3.connect(db_path, check_same_thread=False)
+        self.db_lock = threading.Lock()
+        self._init_db()
+
+    def _init_db(self):
+        """初始化数据库表"""
+        with self.db_lock:
+            self.conn.execute('''
+                CREATE TABLE IF NOT EXISTS scheduled_tasks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    cron_expression TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    target_groups TEXT DEFAULT '',
+                    enabled INTEGER DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_run TIMESTAMP
+                )
+            ''')
+            self.conn.commit()
+            logger.info("定时任务数据库初始化完成")
+
+    def validate_cron_expression(self, cron_expr: str) -> bool:
+        """
+        验证 cron 表达式是否有效
+
+        Args:
+            cron_expr: cron 表达式
+
+        Returns:
+            是否有效
+        """
+        try:
+            croniter(cron_expr)
+            return True
+        except Exception as e:
+            logger.debug(f"无效的 cron 表达式 '{cron_expr}': {e}")
+            return False
+
+    def create_task(
+        self,
+        name: str,
+        cron_expression: str,
+        message: str,
+        target_groups: str = "",
+        enabled: bool = True
+    ) -> Optional[ScheduledTask]:
+        """
+        创建定时任务
+
+        Args:
+            name: 任务名称
+            cron_expression: cron 表达式
+            message: 要发送的消息
+            target_groups: 目标群组（JSON字符串），空字符串表示所有群
+            enabled: 是否启用
+
+        Returns:
+            创建的任务对象，失败返回 None
+        """
+        if not self.validate_cron_expression(cron_expression):
+            logger.error(f"创建任务失败：无效的 cron 表达式 '{cron_expression}'")
+            return None
+
+        with self.db_lock:
+            try:
+                cursor = self.conn.execute(
+                    '''INSERT INTO scheduled_tasks
+                       (name, cron_expression, message, target_groups, enabled)
+                       VALUES (?, ?, ?, ?, ?)''',
+                    (name, cron_expression, message, target_groups, 1 if enabled else 0)
+                )
+                self.conn.commit()
+                task_id = cursor.lastrowid
+
+                # 返回创建的任务
+                return self.get_task(task_id)
+            except sqlite3.Error as e:
+                logger.error(f"创建定时任务失败: {e}")
+                return None
+
+    def get_task(self, task_id: int) -> Optional[ScheduledTask]:
+        """
+        获取指定 ID 的任务
+
+        Args:
+            task_id: 任务 ID
+
+        Returns:
+            任务对象，不存在返回 None
+        """
+        with self.db_lock:
+            cursor = self.conn.execute(
+                'SELECT * FROM scheduled_tasks WHERE id = ?',
+                (task_id,)
+            )
+            row = cursor.fetchone()
+            if row:
+                return self._row_to_task(row)
+            return None
+
+    def get_all_tasks(self) -> List[ScheduledTask]:
+        """
+        获取所有任务
+
+        Returns:
+            任务列表
+        """
+        with self.db_lock:
+            cursor = self.conn.execute('SELECT * FROM scheduled_tasks ORDER BY id DESC')
+            rows = cursor.fetchall()
+            return [self._row_to_task(row) for row in rows]
+
+    def get_enabled_tasks(self) -> List[ScheduledTask]:
+        """
+        获取所有已启用的任务
+
+        Returns:
+            已启用的任务列表
+        """
+        with self.db_lock:
+            cursor = self.conn.execute(
+                'SELECT * FROM scheduled_tasks WHERE enabled = 1 ORDER BY id'
+            )
+            rows = cursor.fetchall()
+            return [self._row_to_task(row) for row in rows]
+
+    def update_task(
+        self,
+        task_id: int,
+        name: Optional[str] = None,
+        cron_expression: Optional[str] = None,
+        message: Optional[str] = None,
+        target_groups: Optional[str] = None,
+        enabled: Optional[bool] = None
+    ) -> bool:
+        """
+        更新定时任务
+
+        Args:
+            task_id: 任务 ID
+            name: 任务名称
+            cron_expression: cron 表达式
+            message: 消息内容
+            target_groups: 目标群组
+            enabled: 是否启用
+
+        Returns:
+            是否成功
+        """
+        # 验证 cron 表达式
+        if cron_expression is not None and not self.validate_cron_expression(cron_expression):
+            logger.error(f"更新任务失败：无效的 cron 表达式 '{cron_expression}'")
+            return False
+
+        with self.db_lock:
+            try:
+                # 构建更新语句
+                updates = []
+                params = []
+
+                if name is not None:
+                    updates.append("name = ?")
+                    params.append(name)
+                if cron_expression is not None:
+                    updates.append("cron_expression = ?")
+                    params.append(cron_expression)
+                if message is not None:
+                    updates.append("message = ?")
+                    params.append(message)
+                if target_groups is not None:
+                    updates.append("target_groups = ?")
+                    params.append(target_groups)
+                if enabled is not None:
+                    updates.append("enabled = ?")
+                    params.append(1 if enabled else 0)
+
+                if not updates:
+                    return True
+
+                updates.append("updated_at = CURRENT_TIMESTAMP")
+                params.append(task_id)
+
+                query = f"UPDATE scheduled_tasks SET {', '.join(updates)} WHERE id = ?"
+                self.conn.execute(query, params)
+                self.conn.commit()
+                return True
+            except sqlite3.Error as e:
+                logger.error(f"更新定时任务失败: {e}")
+                return False
+
+    def delete_task(self, task_id: int) -> bool:
+        """
+        删除定时任务
+
+        Args:
+            task_id: 任务 ID
+
+        Returns:
+            是否成功
+        """
+        with self.db_lock:
+            try:
+                self.conn.execute('DELETE FROM scheduled_tasks WHERE id = ?', (task_id,))
+                self.conn.commit()
+                return True
+            except sqlite3.Error as e:
+                logger.error(f"删除定时任务失败: {e}")
+                return False
+
+    def update_last_run(self, task_id: int):
+        """
+        更新任务的最后运行时间
+
+        Args:
+            task_id: 任务 ID
+        """
+        with self.db_lock:
+            try:
+                self.conn.execute(
+                    'UPDATE scheduled_tasks SET last_run = CURRENT_TIMESTAMP WHERE id = ?',
+                    (task_id,)
+                )
+                self.conn.commit()
+            except sqlite3.Error as e:
+                logger.error(f"更新任务运行时间失败: {e}")
+
+    def should_run(self, task: ScheduledTask, current_time: datetime) -> bool:
+        """
+        检查任务是否应该运行
+
+        Args:
+            task: 任务对象
+            current_time: 当前时间
+
+        Returns:
+            是否应该运行
+        """
+        if not task.enabled:
+            return False
+
+        try:
+            # 使用 croniter 检查是否到了执行时间
+            cron = croniter(task.cron_expression, current_time)
+            # 获取上次应该运行的时间
+            prev_run = cron.get_prev(datetime)
+
+            # 如果从未运行过，或者上次应该运行的时间在最后运行时间之后
+            if task.last_run is None:
+                return True
+
+            # 解析最后运行时间
+            last_run_dt = datetime.fromisoformat(task.last_run.replace('Z', '+00:00'))
+
+            # 如果上次应该运行的时间在最后运行时间之后，说明需要运行
+            return prev_run > last_run_dt
+        except Exception as e:
+            logger.error(f"检查任务 {task.id} 运行时间失败: {e}")
+            return False
+
+    def _row_to_task(self, row: tuple) -> ScheduledTask:
+        """
+        将数据库行转换为任务对象
+
+        Args:
+            row: 数据库行
+
+        Returns:
+            任务对象
+        """
+        return ScheduledTask(
+            id=row[0],
+            name=row[1],
+            cron_expression=row[2],
+            message=row[3],
+            target_groups=row[4],
+            enabled=bool(row[5]),
+            created_at=row[6],
+            updated_at=row[7],
+            last_run=row[8]
+        )
+
+    def close(self):
+        """关闭数据库连接"""
+        with self.db_lock:
+            self.conn.close()
