@@ -71,6 +71,12 @@ class ScheduledTaskService:
         """
         self.db_path = db_path
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
+
+        # 启用 WAL 模式以支持并发读写
+        self.conn.execute('PRAGMA journal_mode=WAL')
+        # 设置更短的超时时间
+        self.conn.execute('PRAGMA busy_timeout=5000')
+
         self.db_lock = threading.Lock()
         self._init_db()
 
@@ -365,15 +371,26 @@ class ScheduledTaskService:
             # 计算当前时间距离上次应该执行的时间差（秒）
             time_since_prev = (current_time - prev_run).total_seconds()
 
-            # 如果距离上次执行时间在60秒内，认为当前在执行窗口内
-            in_execution_window = 0 <= time_since_prev <= 60
+            # 如果距离上次执行时间在65秒内，认为当前在执行窗口内
+            # 窗口设置为65秒，以适应5秒的检查间隔（5*13=65秒）
+            in_execution_window = 0 <= time_since_prev <= 65
 
             # 如果从未运行过，只有在执行窗口内才运行
-            if task.last_run is None:
+            if task.last_run is None or not task.last_run.strip():
                 return in_execution_window
 
             # 解析最后运行时间
-            last_run_dt = datetime.fromisoformat(task.last_run.replace('Z', '+00:00'))
+            try:
+                # 尝试多种时间格式
+                last_run_str = task.last_run.replace('Z', '+00:00')
+                # SQLite CURRENT_TIMESTAMP 格式: YYYY-MM-DD HH:MM:SS
+                if ' ' in last_run_str and '+' not in last_run_str:
+                    last_run_dt = datetime.strptime(last_run_str, '%Y-%m-%d %H:%M:%S')
+                else:
+                    last_run_dt = datetime.fromisoformat(last_run_str)
+            except (ValueError, AttributeError) as e:
+                logger.warning(f"无法解析任务 {task.id} 的 last_run 时间 '{task.last_run}': {e}，视为从未运行")
+                return in_execution_window
 
             # 如果上次应该运行的时间在最后运行时间之后，且当前在执行窗口内，说明需要运行
             return prev_run > last_run_dt and in_execution_window

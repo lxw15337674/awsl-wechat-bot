@@ -410,8 +410,8 @@ class HTTPServer:
                         # 更新最后运行时间
                         self.task_service.update_last_run(task.id)
 
-                # 每秒检查一次
-                time.sleep(1)
+                # 每5秒检查一次（减少数据库访问频率）
+                time.sleep(5)
             except Exception as e:
                 logger.error(f"定时任务调度出错: {e}", exc_info=True)
                 time.sleep(5)
