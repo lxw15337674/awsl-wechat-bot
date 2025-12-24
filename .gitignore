@@ -8,7 +8,7 @@ venv/
 ENV/
 
 # Database
-messages.db
+*.db
 
 # IDE
 .idea/
