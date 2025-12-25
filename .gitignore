@@ -25,3 +25,6 @@ ENV/
 
 # Environment variables
 .env
+
+# Scripts with sensitive config
+tools/daily_summary.sh
