@@ -687,7 +687,7 @@
 }'></textarea>
                     </div>
 
-                    <div class="form-group">
+                    <div class="form-group" id="taskTargetGroupsGroup">
                         <label>目标群组（不选择则发送到所有群）</label>
                         <div id="targetGroupsCheckboxes" class="checkbox-group">
                             <!-- 动态生成复选框 -->
@@ -836,6 +836,7 @@
             $('taskTextGroup').style.display = messageType === 'text' ? 'block' : 'none';
             $('taskImageGroup').style.display = messageType === 'image' ? 'block' : 'none';
             $('taskSummaryGroup').style.display = messageType === 'summary' ? 'block' : 'none';
+            $('taskTargetGroupsGroup').style.display = messageType === 'summary' ? 'none' : 'block';
         }
 
         // ==================== 图片预览 ====================
