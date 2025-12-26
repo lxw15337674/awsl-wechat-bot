@@ -81,7 +81,7 @@ OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_MODEL=gpt-4o-mini
 
 # 命令 API 地址（可选）
-COMMAND_API_BASE_URL=https://bhwa233-api.vercel.app
+COMMAND_API_BASE_URL=https://your-api-domain.com/api
 
 # 调试模式（可选，默认关闭）
 DEBUG=false
@@ -106,7 +106,7 @@ class Config(BaseSettings):
     TRIGGER_COOLDOWN: int = 10
 
     # 命令 API 地址
-    COMMAND_API_BASE_URL: str = "https://bhwa233-api.vercel.app"
+    COMMAND_API_BASE_URL: str = "https://your-api-domain.com/api"
 
     # 调试模式
     DEBUG: bool = False

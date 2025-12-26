@@ -28,7 +28,7 @@ class CommandService:
         """
         try:
             response = requests.get(
-                f"{self.api_base_url}/api/command/hp",
+                f"{self.api_base_url}/command/hp",
                 headers={'accept': 'application/json'},
                 timeout=30
             )
@@ -90,7 +90,7 @@ class CommandService:
         """
         try:
             # 构建 API URL
-            url = f"{self.api_base_url}/api/command"
+            url = f"{self.api_base_url}/command"
 
             # 构建完整的命令字符串（命令 + 参数）
             full_command = command_key

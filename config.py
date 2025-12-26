@@ -22,7 +22,7 @@ class Config(BaseSettings):
     API_URL: str = "https://awsl.api.awsl.icu/v2/random_json"
 
     # 命令 API 地址
-    COMMAND_API_BASE_URL: str = "https://bhwa233-api.vercel.app"
+    COMMAND_API_BASE_URL: str = "https://your-api-domain.com/api"
 
     # 检查消息间隔（秒）
     CHECK_INTERVAL: int = 3
