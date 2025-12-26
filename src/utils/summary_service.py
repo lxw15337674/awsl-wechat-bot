@@ -256,21 +256,40 @@ class SummaryService:
 
                 # 生成总结
                 logger.info("[Summary] 调用 LLM 生成总结...")
-                summary = summarize_with_llm(
-                    messages_text=messages_text,
-                    group_name=group.group_name,
-                    date_str=date_str,
-                    api_url=app_config.OPENAI_BASE_URL,
-                    api_key=app_config.OPENAI_API_KEY,
-                    model=app_config.OPENAI_MODEL
-                )
+                try:
+                    summary = summarize_with_llm(
+                        messages_text=messages_text,
+                        group_name=group.group_name,
+                        date_str=date_str,
+                        api_url=app_config.OPENAI_BASE_URL,
+                        api_key=app_config.OPENAI_API_KEY,
+                        model=app_config.OPENAI_MODEL
+                    )
+                except Exception as e:
+                    logger.error(f"[Summary] LLM 总结失败: {e}")
+                    group_result["message"] = f"LLM 总结失败: {str(e)}"
+                    results["groups"][group.group_id] = group_result
+                    fail_count += 1
+                    continue
+
+                # 验证 LLM 返回结果
+                if not summary or len(summary.strip()) < 50:
+                    logger.error(f"[Summary] LLM 返回内容无效或过短")
+                    group_result["message"] = "LLM 返回内容无效"
+                    results["groups"][group.group_id] = group_result
+                    fail_count += 1
+                    continue
+
+                logger.info(f"[Summary] LLM 总结成功，长度: {len(summary)}")
 
                 # 合并总结和排行榜
                 summary = summary + "\n\n" + ranking
                 gen_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-                # 渲染图片
-                output_image = os.path.join(config.output_path, f"summary_{group.group_id}_{date_str}.png")
+                # 渲染图片（使用绝对路径）
+                output_dir = os.path.abspath(config.output_path)
+                os.makedirs(output_dir, exist_ok=True)
+                output_image = os.path.join(output_dir, f"summary_{group.group_id}_{date_str}.png")
                 logger.info(f"[Summary] 渲染图片: {output_image}")
 
                 if not render_to_image(summary, date_str, valid_count, gen_time, output_image):
@@ -278,6 +297,16 @@ class SummaryService:
                     results["groups"][group.group_id] = group_result
                     fail_count += 1
                     continue
+
+                # 验证图片文件存在
+                if not os.path.exists(output_image):
+                    logger.error(f"[Summary] 图片文件不存在: {output_image}")
+                    group_result["message"] = "图片文件不存在"
+                    results["groups"][group.group_id] = group_result
+                    fail_count += 1
+                    continue
+
+                logger.info(f"[Summary] 图片渲染成功: {output_image}")
 
                 # 发送图片
                 logger.info(f"[Summary] 发送图片到群聊: {group.group_name}")

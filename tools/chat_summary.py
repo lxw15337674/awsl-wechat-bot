@@ -421,8 +421,14 @@ def render_to_image(summary: str, date_str: str, msg_count: int, gen_time: str, 
         if os.path.exists(temp_path):
             os.remove(temp_path)
 
-        # 渲染截图
-        hti.screenshot(html_str=full_html, save_as=temp_name)
+        # 将 HTML 写入临时文件（避免 html2image 内部临时文件被删除的问题）
+        html_file_path = os.path.join(output_dir, f"_temp_{output_name}.html")
+        with open(html_file_path, "w", encoding="utf-8") as f:
+            f.write(full_html)
+
+        # 使用文件 URL 渲染截图（而非 html_str，避免 ERR_FILE_NOT_FOUND）
+        file_url = f"file:///{html_file_path.replace(os.sep, '/')}"
+        hti.screenshot(url=file_url, save_as=temp_name)
 
         # 等待文件生成
         import time
@@ -463,6 +469,8 @@ def render_to_image(summary: str, date_str: str, msg_count: int, gen_time: str, 
         # 删除临时文件
         if os.path.exists(temp_path) and temp_path != final_path:
             os.remove(temp_path)
+        if os.path.exists(html_file_path):
+            os.remove(html_file_path)
 
         return True
     except Exception as e:
