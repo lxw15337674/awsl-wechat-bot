@@ -250,7 +250,7 @@ class SummaryService:
                     results["groups"][group.group_id] = group_result
                     continue
 
-                messages_text, valid_count, sender_counts = format_messages_for_llm(messages)
+                messages_text, valid_count, sender_stats = format_messages_for_llm(messages)
                 group_result["msg_count"] = valid_count
 
                 if valid_count == 0:
@@ -259,7 +259,7 @@ class SummaryService:
                     continue
 
                 # 生成排行榜
-                ranking = generate_ranking(sender_counts)
+                ranking = generate_ranking(sender_stats)
 
                 # 生成总结
                 logger.info("[Summary] 调用 LLM 生成总结...")

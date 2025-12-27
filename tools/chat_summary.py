@@ -164,13 +164,13 @@ def decrypt_database(
     return response.json()
 
 
-def format_messages_for_llm(messages: list[dict]) -> tuple[str, int, dict[str, int]]:
-    """将消息格式化为 LLM 可读的文本，并统计发送者消息数量"""
+def format_messages_for_llm(messages: list[dict]) -> tuple[str, int, dict[str, tuple[int, int]]]:
+    """将消息格式化为 LLM 可读的文本，并统计发送者消息数量和字数"""
     if not messages:
         return "（无消息记录）", 0, {}
 
     lines = []
-    sender_counts: dict[str, int] = {}
+    sender_stats: dict[str, tuple[int, int]] = {}  # sender -> (消息数, 字数)
 
     for msg in messages:
         if msg.get("is_self"):
@@ -180,27 +180,34 @@ def format_messages_for_llm(messages: list[dict]) -> tuple[str, int, dict[str, i
         content = msg.get("content", "")
         lines.append(f"[{time_str}] {sender}: {content}")
 
-        # 统计消息数量
-        sender_counts[sender] = sender_counts.get(sender, 0) + 1
+        # 统计消息数量和字数
+        count, chars = sender_stats.get(sender, (0, 0))
+        sender_stats[sender] = (count + 1, chars + len(content))
 
-    return "\n".join(lines), len(lines), sender_counts
+    return "\n".join(lines), len(lines), sender_stats
 
 
-def generate_ranking(sender_counts: dict[str, int], top_n: int = 10) -> str:
+def generate_ranking(sender_stats: dict[str, tuple[int, int]], top_n: int = 10) -> str:
     """生成消息排行榜 Markdown"""
-    if not sender_counts:
+    if not sender_stats:
         return ""
 
     # 按消息数量排序
-    sorted_senders = sorted(sender_counts.items(), key=lambda x: x[1], reverse=True)[:top_n]
+    sorted_senders = sorted(sender_stats.items(), key=lambda x: x[1][0], reverse=True)[:top_n]
 
     # 排名标识
     rank_icons = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
 
+    # 计算总字数
+    total_chars = sum(chars for _, chars in sender_stats.values())
+
     lines = ["## 📊 发言排行榜", ""]
-    for i, (sender, count) in enumerate(sorted_senders):
+    for i, (sender, (count, chars)) in enumerate(sorted_senders):
         icon = rank_icons[i] if i < len(rank_icons) else f"#{i + 1}"
-        lines.append(f"- {icon} **{sender}** - {count} 条消息")
+        lines.append(f"- {icon} **{sender}** - {count} 条消息 / {chars} 字")
+
+    lines.append("")
+    lines.append(f"**总计**: {sum(c for c, _ in sender_stats.values())} 条消息 / {total_chars} 字")
 
     return "\n".join(lines)
 
@@ -587,7 +594,7 @@ def cmd_summary(args) -> int:
         print("没有消息记录，无需总结")
         return 0
 
-    messages_text, valid_count, sender_counts = format_messages_for_llm(messages)
+    messages_text, valid_count, sender_stats = format_messages_for_llm(messages)
     print(f"有效消息: {valid_count} 条（已过滤自己发送的消息）")
 
     if valid_count == 0:
@@ -595,7 +602,7 @@ def cmd_summary(args) -> int:
         return 0
 
     # 生成排行榜
-    ranking = generate_ranking(sender_counts)
+    ranking = generate_ranking(sender_stats)
 
     # 生成总结
     print("正在生成总结...")
