@@ -196,6 +196,7 @@ class SummaryService:
 
         # 2. 确定日期范围
         if config.date:
+            # 指定日期：使用该日期的 05:00 到次日 05:00
             try:
                 target_date = datetime.strptime(config.date, "%Y-%m-%d")
             except ValueError:
@@ -203,13 +204,17 @@ class SummaryService:
                     success=False,
                     message=f"无效的日期格式: {config.date}"
                 )
+            date_str = target_date.strftime("%Y-%m-%d")
+            next_date_str = (target_date + timedelta(days=1)).strftime("%Y-%m-%d")
+            start_time = f"{date_str} 05:00:00"
+            end_time = f"{next_date_str} 05:00:00"
         else:
-            target_date = datetime.now()
-
-        date_str = target_date.strftime("%Y-%m-%d")
-        next_date_str = (target_date + timedelta(days=1)).strftime("%Y-%m-%d")
-        start_time = f"{date_str} 05:00:00"
-        end_time = f"{next_date_str} 05:00:00"
+            # 未指定日期：使用过去 24 小时
+            now = datetime.now()
+            start_datetime = now - timedelta(hours=24)
+            date_str = f"{start_datetime.strftime('%Y-%m-%d %H:%M')} ~ {now.strftime('%Y-%m-%d %H:%M')}"
+            start_time = start_datetime.strftime("%Y-%m-%d %H:%M:%S")
+            end_time = now.strftime("%Y-%m-%d %H:%M:%S")
 
         # 3. 为每个群生成总结
         success_count = 0

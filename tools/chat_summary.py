@@ -536,23 +536,18 @@ def cmd_summary(args) -> int:
     """总结子命令"""
     # 确定日期范围
     if args.date:
-        # 指定日期：使用该日期的 05:00 到次日 05:00
         try:
             target_date = datetime.strptime(args.date, "%Y-%m-%d")
         except ValueError:
             print(f"错误: 无效的日期格式: {args.date}")
             return 1
-        date_str = target_date.strftime("%Y-%m-%d")
-        next_date_str = (target_date + timedelta(days=1)).strftime("%Y-%m-%d")
-        start_time = f"{date_str} 05:00:00"
-        end_time = f"{next_date_str} 05:00:00"
     else:
-        # 未指定日期：使用过去 24 小时
-        now = datetime.now()
-        start_datetime = now - timedelta(hours=24)
-        date_str = f"{start_datetime.strftime('%Y-%m-%d %H:%M')} ~ {now.strftime('%Y-%m-%d %H:%M')}"
-        start_time = start_datetime.strftime("%Y-%m-%d %H:%M:%S")
-        end_time = now.strftime("%Y-%m-%d %H:%M:%S")
+        target_date = datetime.now()
+
+    date_str = target_date.strftime("%Y-%m-%d")
+    next_date_str = (target_date + timedelta(days=1)).strftime("%Y-%m-%d")
+    start_time = f"{date_str} 05:00:00"
+    end_time = f"{next_date_str} 05:00:00"
 
     if not args.db_path:
         print("错误: 请提供 --db-path 参数")
