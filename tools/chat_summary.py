@@ -511,6 +511,9 @@ def send_image_to_group(
 
 def cmd_decrypt(args) -> int:
     """解密子命令"""
+    # 从 args 或 config 获取 token
+    token = args.token or config.HTTP_API_TOKEN or None
+
     print(f"输入路径: {args.input}")
     print(f"输出路径: {args.output}")
     print(f"API: {args.api_base}")
@@ -523,7 +526,7 @@ def cmd_decrypt(args) -> int:
             input_path=args.input,
             key=args.key,
             output_path=args.output,
-            token=args.token
+            token=token
         )
         print(f"解密完成: {result}")
         return 0
@@ -534,20 +537,28 @@ def cmd_decrypt(args) -> int:
 
 def cmd_summary(args) -> int:
     """总结子命令"""
+    # 从 args 或 config 获取 token
+    token = args.token or config.HTTP_API_TOKEN or None
+
     # 确定日期范围
     if args.date:
+        # 指定日期：使用该日期的 05:00 到次日 05:00
         try:
             target_date = datetime.strptime(args.date, "%Y-%m-%d")
         except ValueError:
             print(f"错误: 无效的日期格式: {args.date}")
             return 1
+        date_str = target_date.strftime("%Y-%m-%d")
+        next_date_str = (target_date + timedelta(days=1)).strftime("%Y-%m-%d")
+        start_time = f"{date_str} 05:00:00"
+        end_time = f"{next_date_str} 05:00:00"
     else:
-        target_date = datetime.now()
-
-    date_str = target_date.strftime("%Y-%m-%d")
-    next_date_str = (target_date + timedelta(days=1)).strftime("%Y-%m-%d")
-    start_time = f"{date_str} 05:00:00"
-    end_time = f"{next_date_str} 05:00:00"
+        # 未指定日期：使用过去 24 小时
+        now = datetime.now()
+        start_datetime = now - timedelta(hours=24)
+        date_str = f"{start_datetime.strftime('%Y-%m-%d %H:%M')} ~ {now.strftime('%Y-%m-%d %H:%M')}"
+        start_time = start_datetime.strftime("%Y-%m-%d %H:%M:%S")
+        end_time = now.strftime("%Y-%m-%d %H:%M:%S")
 
     if not args.db_path:
         print("错误: 请提供 --db-path 参数")
@@ -575,7 +586,7 @@ def cmd_summary(args) -> int:
             start=start_time,
             end=end_time,
             limit=args.limit,
-            token=args.token
+            token=token
         )
     except requests.exceptions.RequestException as e:
         print(f"错误: 获取聊天记录失败: {e}")
@@ -636,7 +647,7 @@ def cmd_summary(args) -> int:
                 api_base=args.api_base,
                 group_name=args.send,
                 image_path=output_path,
-                token=args.token
+                token=token
             )
             print("图片发送成功!")
         except requests.exceptions.RequestException as e:
